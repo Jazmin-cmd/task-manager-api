@@ -1,0 +1,38 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: task-manager-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_DATABASE:-task_manager}
+      POSTGRES_USER: ${DB_USERNAME:-task_manager}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-secret}
+    ports:
+      - "${DB_EXTERNAL_PORT:-55432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-task_manager} -d ${DB_DATABASE:-task_manager}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  app:
+    build:
+      context: .
+      dockerfile: docker/php/Dockerfile
+    container_name: task-manager-api
+    restart: unless-stopped
+    environment:
+      # Permite que el servidor embebido de PHP atienda varias peticiones a la vez.
+      PHP_CLI_SERVER_WORKERS: 4
+    ports:
+      - "${APP_EXTERNAL_PORT:-8000}:8000"
+    volumes:
+      - .:/var/www/html
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:
