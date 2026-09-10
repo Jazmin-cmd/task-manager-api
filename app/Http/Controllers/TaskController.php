@@ -10,7 +10,7 @@ use Illuminate\Support\Facades\DB;
 class TaskController extends Controller
 {
     public function index(Request $request)
-    {
+    { 
         $query = Task::with('assignedUser');
 
         if ($request->filled('status')) {
@@ -26,12 +26,23 @@ class TaskController extends Controller
             $query->whereRaw('LOWER(title) LIKE ?', ['%' . strtolower($search) . '%']);
         }
 
-        $tasks = $query->orderBy('created_at')->orderBy('id')->get();
+        $perPage = (int) $request->input('per_page', 20);
+        $perPage = max(1, min($perPage, 100));
 
-        $data = $tasks->map(fn (Task $task) => $this->formatTask($task))->values();
+        $paginator = $query->orderBy('created_at')->orderBy('id')->paginate($perPage);
+
+        $data = collect($paginator->items())
+            ->map(fn (Task $task) => $this->formatTask($task))
+            ->values();
 
         return response()->json([
             'data' => $data,
+            'meta' => [
+                'current_page' => $paginator->currentPage(),
+                'per_page' => $paginator->perPage(),
+                'total' => $paginator->total(),
+                'last_page' => $paginator->lastPage(),
+            ],
         ]);
     }
 
@@ -52,6 +63,8 @@ class TaskController extends Controller
 
     public function store(Request $request)
     {
+        $this->trimStringFields($request, ['title', 'description']);
+
         $validated = $request->validate([
             'title' => ['required', 'string', 'min:5', 'max:255', 'regex:/[\p{L}\p{N}]/u'],
             'description' => 'nullable|string|min:5|max:2000',
@@ -82,6 +95,8 @@ class TaskController extends Controller
                 'message' => 'Tarea no encontrada',
             ], 404);
         }
+
+        $this->trimStringFields($request, ['title', 'description']);
 
         $validated = $request->validate([
             'title' => ['required', 'string', 'min:5', 'max:255', 'regex:/[\p{L}\p{N}]/u'],
@@ -191,14 +206,22 @@ class TaskController extends Controller
 
         return $payload;
     }
-    private function statusLabel(string $status): string
+
+    private function trimStringFields(Request $request, array $fields): void
     {
-        return match ($status) {
-            'pending' => 'Pendiente',
-            'in_progress' => 'En progreso',
-            'completed' => 'Finalizada',
-            default => $status,
-        };
+        $trimmed = [];
+
+        foreach ($fields as $field) {
+            $value = $request->input($field);
+
+            if (is_string($value)) {
+                $trimmed[$field] = trim($value);
+            }
+        }
+
+        if ($trimmed) {
+            $request->merge($trimmed);
+        }
     }
 }
 
