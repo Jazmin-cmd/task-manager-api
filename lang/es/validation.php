@@ -172,9 +172,9 @@ return [
     |--------------------------------------------------------------------------
     */
 
-    'custom' => [
-        'attribute-name' => [
-            'rule-name' => 'mensaje personalizado',
+   'custom' => [
+        'title' => [
+            'regex' => 'El título debe contener al menos una letra o número.',
         ],
     ],
 

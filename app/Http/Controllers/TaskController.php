@@ -5,38 +5,30 @@ namespace App\Http\Controllers;
 use App\Models\Task;
 use App\Models\TaskHistory;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class TaskController extends Controller
 {
     public function index(Request $request)
     {
-        $query = Task::query();
+        $query = Task::with('assignedUser');
 
         if ($request->filled('status')) {
             $query->where('status', $request->input('status'));
         }
 
-        $tasks = $query->get();
-
         if ($request->filled('priority')) {
-            $priority = $request->input('priority');
-            $tasks = $tasks->filter(function (Task $task) use ($priority) {
-                return $task->priority === $priority;
-            });
+            $query->where('priority', $request->input('priority'));
         }
 
         if ($request->filled('search')) {
-            $search = strtolower($request->input('search'));
-            $tasks = $tasks->filter(function (Task $task) use ($search) {
-                return str_contains(strtolower($task->title), $search);
-            });
+            $search = $request->input('search');
+            $query->whereRaw('LOWER(title) LIKE ?', ['%' . strtolower($search) . '%']);
         }
 
-        $data = [];
+        $tasks = $query->orderBy('created_at')->orderBy('id')->get();
 
-        foreach ($tasks as $task) {
-            $data[] = $this->formatTask($task);
-        }
+        $data = $tasks->map(fn (Task $task) => $this->formatTask($task))->values();
 
         return response()->json([
             'data' => $data,
@@ -60,12 +52,21 @@ class TaskController extends Controller
 
     public function store(Request $request)
     {
-        $request->validate([
-            'title' => 'required',
-            'assigned_user_id' => 'nullable|integer',
+        $validated = $request->validate([
+            'title' => ['required', 'string', 'min:5', 'max:255', 'regex:/[\p{L}\p{N}]/u'],
+            'description' => 'nullable|string|min:5|max:2000',
+            'status' => 'nullable|in:pending,in_progress,completed',
+            'priority' => 'nullable|in:low,medium,high',
+            'due_date' => [
+                'nullable',
+                'date',
+                'after_or_equal:' . now()->startOfYear()->format('Y-m-d'),
+                'before_or_equal:' . now()->addYear()->format('Y-m-d'),
+            ],
+            'assigned_user_id' => 'nullable|integer|exists:users,id',
         ]);
 
-        $task = Task::create($request->all());
+        $task = Task::create($validated);
 
         return response()->json([
             'data' => $this->formatTask($task),
@@ -79,16 +80,26 @@ class TaskController extends Controller
         if (! $task) {
             return response()->json([
                 'message' => 'Tarea no encontrada',
-            ]);
+            ], 404);
         }
 
-        $request->validate([
-            'title' => 'required',
+        $validated = $request->validate([
+            'title' => ['required', 'string', 'min:5', 'max:255', 'regex:/[\p{L}\p{N}]/u'],
+            'description' => 'nullable|string|min:5|max:2000',
+            'status' => 'nullable|in:pending,in_progress,completed',
+            'priority' => 'nullable|in:low,medium,high',
+            'due_date' => [
+                'nullable',
+                'date',
+                'after_or_equal:' . now()->startOfYear()->format('Y-m-d'),
+                'before_or_equal:' . now()->addYear()->format('Y-m-d'),
+            ],
+            'assigned_user_id' => 'nullable|integer|exists:users,id',
         ]);
 
         $previousStatus = $task->status;
 
-        $task->fill($request->all());
+        $task->fill($validated);
         $task->save();
 
         if ($task->status === 'completed' && $previousStatus !== 'completed') {
@@ -105,9 +116,7 @@ class TaskController extends Controller
         $task = Task::find($id);
 
         if (! $task) {
-            return response()->json([
-                'message' => 'Tarea no encontrada',
-            ]);
+            return response()->json(['message' => 'Tarea no encontrada'], 404);
         }
 
         $request->validate([
@@ -115,8 +124,9 @@ class TaskController extends Controller
         ]);
 
         $previousStatus = $task->status;
+        $newStatus = $request->input('status');
 
-        $task->status = $request->input('status');
+        $task->status = $newStatus;
         $task->save();
 
         if ($task->status === 'completed' && $previousStatus !== 'completed') {
@@ -130,15 +140,17 @@ class TaskController extends Controller
 
     private function recordCompletion(Task $task, ?string $previousStatus): void
     {
-        $task->completed_at = now();
-        $task->save();
+        DB::transaction(function () use ($task, $previousStatus) {
+            $task->completed_at = now();
+            $task->save();
 
-        TaskHistory::create([
-            'task_id' => $task->id,
-            'from_status' => $previousStatus,
-            'to_status' => $task->status,
-            'note' => 'Tarea marcada como finalizada',
-        ]);
+            TaskHistory::create([
+                'task_id' => $task->id,
+                'from_status' => $previousStatus,
+                'to_status' => $task->status,
+                'note' => 'Tarea marcada como finalizada',
+            ]);
+        });
     }
 
     private function formatTask(Task $task, bool $withHistory = false): array
@@ -179,4 +191,14 @@ class TaskController extends Controller
 
         return $payload;
     }
+    private function statusLabel(string $status): string
+    {
+        return match ($status) {
+            'pending' => 'Pendiente',
+            'in_progress' => 'En progreso',
+            'completed' => 'Finalizada',
+            default => $status,
+        };
+    }
 }
+
